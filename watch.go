@@ -56,7 +56,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	youtubeService, err = youtube.NewService(ctx, option.WithAPIKey(config.APIKey))
+	youtubeService, err = youtube.NewService(ctx, option.WithAPIKey("AIzaSyCKswH77nNUSj4XoLS6CAzWbzZiwaKgFSQ"))
 	if err != nil {
 		log.Fatal(err)
 	}
