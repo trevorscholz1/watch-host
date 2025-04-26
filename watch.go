@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
@@ -13,13 +12,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/joho/godotenv"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
 )
 
 var (
 	youtubeService *youtube.Service
-	config         *Config
 	templates      *template.Template
 )
 
@@ -50,13 +49,17 @@ var selectedChannels SelectedChannels
 
 func main() {
 	var err error
-	config, err = loadConfig("config.json")
-	if err != nil {
-		log.Fatal(err)
+
+	if os.Getenv("RENDER") == "" {
+		err := godotenv.Load()
+		if err != nil {
+			log.Println("Warning: no .env file found, skipping.")
+		}
 	}
+	apiKey := os.Getenv("API_KEY")
 
 	ctx := context.Background()
-	youtubeService, err = youtube.NewService(ctx, option.WithAPIKey("AIzaSyCKswH77nNUSj4XoLS6CAzWbzZiwaKgFSQ"))
+	youtubeService, err = youtube.NewService(ctx, option.WithAPIKey(apiKey))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -297,17 +300,4 @@ func getRandomInterval(duration time.Duration) (string, string) {
 	end := start + 30*time.Minute
 	return fmt.Sprintf("%02d:%02d", int(start.Minutes()), int(start.Seconds())%60),
 		fmt.Sprintf("%02d:%02d", int(end.Minutes()), int(end.Seconds())%60)
-}
-
-func loadConfig(filename string) (*Config, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	var config Config
-	err = json.Unmarshal(data, &config)
-	if err != nil {
-		return nil, err
-	}
-	return &config, nil
 }
