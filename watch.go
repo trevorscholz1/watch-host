@@ -22,10 +22,6 @@ var (
 	templates      *template.Template
 )
 
-type Config struct {
-	APIKey string `json:"api_key"`
-}
-
 type SearchResult struct {
 	ChannelTitle string
 	ChannelID    string
