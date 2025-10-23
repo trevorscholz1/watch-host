@@ -154,6 +154,7 @@ func handleRandomVideo(w http.ResponseWriter, r *http.Request) {
 
 	channelIndex := rand.Intn(len(selectedChannels.Channels))
 	selectedChannel := selectedChannels.Channels[channelIndex]
+	log.Println("Selected Channel:", channelIndex)
 
 	video, videoCount, err := getRandomVideo(youtubeService, selectedChannel.ChannelID)
 	if err != nil {
@@ -205,6 +206,7 @@ func getRandomVideo(service *youtube.Service, channelID string) (*youtube.Playli
 	}
 
 	randomIndex := rand.Int63n(int64(videoCount))
+	log.Println("Selected Video", randomIndex, "from: ", videoCount)
 
 	pageSize := int64(50)
 	pageToFetch := randomIndex / pageSize
