@@ -257,6 +257,9 @@ func searchChannels(service *youtube.Service, query string) ([]SearchResult, err
 	return results, nil
 }
 
+func searchShows() {
+}
+
 func getVideoDuration(service *youtube.Service, videoID string) (time.Duration, error) {
 	call := service.Videos.List([]string{"contentDetails"}).Id(videoID)
 	response, err := call.Do()
