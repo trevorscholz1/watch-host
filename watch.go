@@ -52,10 +52,10 @@ func main() {
 			log.Println("Warning: no .env file found, skipping.")
 		}
 	}
-	apiKey := os.Getenv("API_KEY")
+	api_key := os.Getenv("API_KEY")
 
 	ctx := context.Background()
-	youtubeService, err = youtube.NewService(ctx, option.WithAPIKey(apiKey))
+	youtubeService, err = youtube.NewService(ctx, option.WithAPIKey(api_key))
 	if err != nil {
 		log.Fatal(err)
 	}
