@@ -50,17 +50,22 @@ func main() {
 	if os.Getenv("RENDER") == "" {
 		err := godotenv.Load()
 		if err != nil {
-			log.Println("Warning: no .env file found, skipping.")
+			log.Println("Warning: no .env file found, skipping")
 		}
 	}
 	api_key := os.Getenv("API_KEY")
 
-	// TODO: Use a secure, environment-managed secret key in production
 	session_key := os.Getenv("SESSION_KEY")
 	if session_key == "" {
-		session_key = "very-secret-key-fallback"
+		log.Fatal("SESSION_KEY not set")
 	}
 	store = sessions.NewCookieStore([]byte(session_key))
+	store.Options = &sessions.Options{
+		Path:     "/",
+		MaxAge:   86400 * 30,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
 
 	ctx := context.Background()
 	youtubeService, err = youtube.NewService(ctx, option.WithAPIKey(api_key))
@@ -86,17 +91,33 @@ func main() {
 }
 
 func getChannels(r *http.Request) []SearchResult {
-	session, _ := store.Get(r, "youtube-randomizer-session")
-	if val, ok := session.Values["channels"].([]SearchResult); ok {
-		return val
+	session, err := store.Get(r, "SESSION")
+	if err != nil {
+		log.Println("Session get error:", err)
+		return []SearchResult{}
 	}
-	return []SearchResult{}
+
+	val, ok := session.Values["channels"].([]SearchResult)
+	if !ok {
+		return []SearchResult{}
+	}
+
+	return val
 }
 
 func saveChannels(w http.ResponseWriter, r *http.Request, channels []SearchResult) error {
-	session, _ := store.Get(r, "youtube-randomizer-session")
+	session, err := store.Get(r, "SESSION")
+	if err != nil {
+		return err
+	}
+
 	session.Values["channels"] = channels
-	return session.Save(r, w)
+
+	if err := session.Save(r, w); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
@@ -138,9 +159,13 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAddChannel(w http.ResponseWriter, r *http.Request) {
-	channelTitle := r.FormValue("channel_title")
-	channelID := r.FormValue("channel_id")
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad form", http.StatusBadRequest)
+		return
+	}
 
+	channelTitle := r.Form.Get("channel_title")
+	channelID := r.Form.Get("channel_id")
 	channels := getChannels(r)
 
 	for _, ch := range channels {
@@ -155,17 +180,20 @@ func handleAddChannel(w http.ResponseWriter, r *http.Request) {
 		ChannelID:    channelID,
 	})
 
-	err := saveChannels(w, r, channels)
-	if err != nil {
-		log.Println("Error saving channels:", err)
+	if err := saveChannels(w, r, channels); err != nil {
+		log.Println("Error saving:", err)
 	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func handleRemoveChannel(w http.ResponseWriter, r *http.Request) {
-	channelID := r.FormValue("channel_id")
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad form", http.StatusBadRequest)
+		return
+	}
 
+	channelID := r.FormValue("channel_id")
 	channels := getChannels(r)
 
 	for i, ch := range channels {

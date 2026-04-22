@@ -7,7 +7,10 @@ require (
 	google.golang.org/api v0.204.0
 )
 
-require golang.org/x/oauth2 v0.27.0 // indirect
+require (
+	github.com/gorilla/securecookie v1.1.2 // indirect
+	golang.org/x/oauth2 v0.27.0 // indirect
+)
 
 require (
 	cloud.google.com/go/auth v0.10.0 // indirect
