@@ -2,12 +2,16 @@ module watch
 
 go 1.25.0
 
-require google.golang.org/api v0.204.0
+require (
+	github.com/gorilla/sessions v1.4.0
+	google.golang.org/api v0.204.0
+)
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/gorilla/securecookie v1.1.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/oauth2 v0.34.0 // indirect
 )
 
 require (

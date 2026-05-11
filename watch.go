@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/gob"
 	"fmt"
 	"html/template"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gorilla/sessions"
 	"github.com/joho/godotenv"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
@@ -20,7 +22,12 @@ import (
 var (
 	youtubeService *youtube.Service
 	templates      *template.Template
+	store          *sessions.CookieStore
 )
+
+func init() {
+	gob.Register([]SearchResult{})
+}
 
 type SearchResult struct {
 	ChannelTitle string
@@ -37,22 +44,28 @@ type VideoData struct {
 	UploadDate string
 }
 
-type SelectedChannels struct {
-	Channels []SearchResult
-}
-
-var selectedChannels SelectedChannels
-
 func main() {
 	var err error
 
 	if os.Getenv("RENDER") == "" {
 		err := godotenv.Load()
 		if err != nil {
-			log.Println("Warning: no .env file found, skipping.")
+			log.Println("Warning: no .env file found, skipping")
 		}
 	}
 	api_key := os.Getenv("API_KEY")
+
+	session_key := os.Getenv("SESSION_KEY")
+	if session_key == "" {
+		log.Fatal("SESSION_KEY not set")
+	}
+	store = sessions.NewCookieStore([]byte(session_key))
+	store.Options = &sessions.Options{
+		Path:     "/",
+		MaxAge:   86400 * 30,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
 
 	ctx := context.Background()
 	youtubeService, err = youtube.NewService(ctx, option.WithAPIKey(api_key))
@@ -77,8 +90,41 @@ func main() {
 	}
 }
 
+func getChannels(r *http.Request) []SearchResult {
+	session, err := store.Get(r, "SESSION")
+	if err != nil {
+		log.Println("Session get error:", err)
+		return []SearchResult{}
+	}
+
+	val, ok := session.Values["channels"].([]SearchResult)
+	if !ok {
+		return []SearchResult{}
+	}
+
+	return val
+}
+
+func saveChannels(w http.ResponseWriter, r *http.Request, channels []SearchResult) error {
+	session, err := store.Get(r, "SESSION")
+	if err != nil {
+		return err
+	}
+
+	session.Values["channels"] = channels
+
+	if err := session.Save(r, w); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func handleHome(w http.ResponseWriter, r *http.Request) {
-	templates.ExecuteTemplate(w, "index.html", selectedChannels)
+	channels := getChannels(r)
+	templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
+		"Channels": channels,
+	})
 }
 
 func handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -87,11 +133,12 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	channels := getChannels(r)
 	query := r.FormValue("query")
 	if query == "" {
 		templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
 			"Error":    "Please enter a search query",
-			"Channels": selectedChannels.Channels,
+			"Channels": channels,
 		})
 		return
 	}
@@ -100,67 +147,90 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
 			"Error":    "Error searching for channels: " + err.Error(),
-			"Channels": selectedChannels.Channels,
+			"Channels": channels,
 		})
 		return
 	}
 
 	templates.ExecuteTemplate(w, "results.html", map[string]interface{}{
 		"Results":  results,
-		"Channels": selectedChannels.Channels,
+		"Channels": channels,
 	})
 }
 
 func handleAddChannel(w http.ResponseWriter, r *http.Request) {
-	channelTitle := r.FormValue("channel_title")
-	channelID := r.FormValue("channel_id")
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad form", http.StatusBadRequest)
+		return
+	}
 
-	for _, ch := range selectedChannels.Channels {
+	channelTitle := r.Form.Get("channel_title")
+	channelID := r.Form.Get("channel_id")
+	channels := getChannels(r)
+
+	for _, ch := range channels {
 		if ch.ChannelID == channelID {
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
 	}
 
-	selectedChannels.Channels = append(selectedChannels.Channels, SearchResult{
+	channels = append(channels, SearchResult{
 		ChannelTitle: channelTitle,
 		ChannelID:    channelID,
 	})
+
+	if err := saveChannels(w, r, channels); err != nil {
+		log.Println("Error saving:", err)
+	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func handleRemoveChannel(w http.ResponseWriter, r *http.Request) {
-	channelID := r.FormValue("channel_id")
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad form", http.StatusBadRequest)
+		return
+	}
 
-	for i, ch := range selectedChannels.Channels {
+	channelID := r.FormValue("channel_id")
+	channels := getChannels(r)
+
+	for i, ch := range channels {
 		if ch.ChannelID == channelID {
-			selectedChannels.Channels = append(selectedChannels.Channels[:i], selectedChannels.Channels[i+1:]...)
+			channels = append(channels[:i], channels[i+1:]...)
 			break
 		}
+	}
+
+	err := saveChannels(w, r, channels)
+	if err != nil {
+		log.Println("Error saving channels:", err)
 	}
 
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func handleRandomVideo(w http.ResponseWriter, r *http.Request) {
-	if len(selectedChannels.Channels) == 0 {
+	channels := getChannels(r)
+
+	if len(channels) == 0 {
 		templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
 			"Error":    "No channels selected",
-			"Channels": selectedChannels.Channels,
+			"Channels": channels,
 		})
 		return
 	}
 
-	channelIndex := rand.Intn(len(selectedChannels.Channels))
-	selectedChannel := selectedChannels.Channels[channelIndex]
+	channelIndex := rand.Intn(len(channels))
+	selectedChannel := channels[channelIndex]
 	log.Println("Selected Channel:", channelIndex)
 
 	video, videoCount, err := getRandomVideo(youtubeService, selectedChannel.ChannelID)
 	if err != nil {
 		templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
 			"Error":    "Error fetching random video: " + err.Error(),
-			"Channels": selectedChannels.Channels,
+			"Channels": channels,
 		})
 		return
 	}
@@ -169,7 +239,7 @@ func handleRandomVideo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
 			"Error":    "Error fetching video duration: " + err.Error(),
-			"Channels": selectedChannels.Channels,
+			"Channels": channels,
 		})
 		return
 	}
@@ -186,7 +256,7 @@ func handleRandomVideo(w http.ResponseWriter, r *http.Request) {
 
 	templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
 		"VideoData": data,
-		"Channels":  selectedChannels.Channels,
+		"Channels":  channels,
 	})
 }
 
