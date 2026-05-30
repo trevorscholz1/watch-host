@@ -287,6 +287,8 @@
           <form action="/add-channel" method="post">
             <input type="hidden" name="channel_title" value="{{.ChannelTitle}}" />
             <input type="hidden" name="channel_id" value="{{.ChannelID}}" />
+            <input type="hidden" name="uploads_playlist_id" value="{{.UploadsPlaylistID}}" />
+            <input type="hidden" name="video_count" value="{{.VideoCount}}" />
             <button type="submit" class="add-btn">ADD</button>
           </form>
         </li>

@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/sessions"
@@ -30,8 +31,10 @@ func init() {
 }
 
 type SearchResult struct {
-	ChannelTitle string
-	ChannelID    string
+	ChannelTitle      string
+	ChannelID         string
+	UploadsPlaylistID string
+	VideoCount        uint64
 }
 
 type VideoData struct {
@@ -166,6 +169,10 @@ func handleAddChannel(w http.ResponseWriter, r *http.Request) {
 
 	channelTitle := r.Form.Get("channel_title")
 	channelID := r.Form.Get("channel_id")
+	uploadsPlaylistID := r.Form.Get("uploads_playlist_id")
+	videoCountStr := r.Form.Get("video_count")
+	videoCount, _ := strconv.ParseUint(videoCountStr, 10, 64)
+
 	channels := getChannels(r)
 
 	for _, ch := range channels {
@@ -176,8 +183,10 @@ func handleAddChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channels = append(channels, SearchResult{
-		ChannelTitle: channelTitle,
-		ChannelID:    channelID,
+		ChannelTitle:      channelTitle,
+		ChannelID:         channelID,
+		UploadsPlaylistID: uploadsPlaylistID,
+		VideoCount:        videoCount,
 	})
 
 	if err := saveChannels(w, r, channels); err != nil {
@@ -226,7 +235,7 @@ func handleRandomVideo(w http.ResponseWriter, r *http.Request) {
 	selectedChannel := channels[channelIndex]
 	log.Println("Selected Channel:", channelIndex)
 
-	video, videoCount, err := getRandomVideo(youtubeService, selectedChannel.ChannelID)
+	video, err := getRandomVideo(youtubeService, selectedChannel.ChannelID, selectedChannel.UploadsPlaylistID, selectedChannel.VideoCount)
 	if err != nil {
 		templates.ExecuteTemplate(w, "index.html", map[string]interface{}{
 			"Error":    "Error fetching random video: " + err.Error(),
@@ -249,7 +258,7 @@ func handleRandomVideo(w http.ResponseWriter, r *http.Request) {
 		Title:      video.Snippet.Title,
 		VideoID:    video.Snippet.ResourceId.VideoId,
 		ChannelID:  video.Snippet.ChannelId,
-		ChannelLen: int(videoCount),
+		ChannelLen: int(selectedChannel.VideoCount),
 		Interval:   fmt.Sprintf("%s - %s", start, end),
 		UploadDate: video.Snippet.PublishedAt,
 	}
@@ -260,19 +269,23 @@ func handleRandomVideo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func getRandomVideo(service *youtube.Service, channelID string) (*youtube.PlaylistItem, uint64, error) {
-	channelsResponse, err := service.Channels.List([]string{"contentDetails", "statistics"}).Id(channelID).Do()
-	if err != nil {
-		return nil, 0, err
-	}
-	if len(channelsResponse.Items) == 0 {
-		return nil, 0, fmt.Errorf("channel not found")
+func getRandomVideo(service *youtube.Service, channelID string, uploadsPlaylistID string, videoCount uint64) (*youtube.PlaylistItem, error) {
+	// TODO: Legacy data might not have cached metadata. Implement a permanent migration.
+	if uploadsPlaylistID == "" || videoCount == 0 {
+		log.Println("Metadata missing, performing fallback API call for channel:", channelID)
+		channelsResponse, err := service.Channels.List([]string{"contentDetails", "statistics"}).Id(channelID).Do()
+		if err != nil {
+			return nil, err
+		}
+		if len(channelsResponse.Items) == 0 {
+			return nil, fmt.Errorf("channel not found")
+		}
+		uploadsPlaylistID = channelsResponse.Items[0].ContentDetails.RelatedPlaylists.Uploads
+		videoCount = channelsResponse.Items[0].Statistics.VideoCount
 	}
 
-	uploadsPlaylistID := channelsResponse.Items[0].ContentDetails.RelatedPlaylists.Uploads
-	videoCount := channelsResponse.Items[0].Statistics.VideoCount
 	if videoCount == 0 {
-		return nil, 0, fmt.Errorf("no videos in channel")
+		return nil, fmt.Errorf("no videos in channel")
 	}
 
 	randomIndex := rand.Int63n(int64(videoCount))
@@ -289,24 +302,24 @@ func getRandomVideo(service *youtube.Service, channelID string) (*youtube.Playli
 	for i := int64(0); i < pageToFetch; i++ {
 		response, err := playlistItemsRequest.Do()
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		if response.NextPageToken == "" {
-			return nil, 0, fmt.Errorf("ran out of pages before reaching target video")
+			return nil, fmt.Errorf("ran out of pages before reaching target video")
 		}
 		playlistItemsRequest = playlistItemsRequest.PageToken(response.NextPageToken)
 	}
 
 	playlistItemsResponse, err := playlistItemsRequest.Do()
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
 	if len(playlistItemsResponse.Items) <= int(itemOnPage) {
-		return nil, 0, fmt.Errorf("video index out of range")
+		return nil, fmt.Errorf("video index out of range")
 	}
 
-	return playlistItemsResponse.Items[itemOnPage], videoCount, nil
+	return playlistItemsResponse.Items[itemOnPage], nil
 }
 
 func searchChannels(service *youtube.Service, query string) ([]SearchResult, error) {
@@ -316,12 +329,33 @@ func searchChannels(service *youtube.Service, query string) ([]SearchResult, err
 		return nil, err
 	}
 
+	var channelIDs []string
 	var results []SearchResult
 	for _, item := range response.Items {
+		channelIDs = append(channelIDs, item.Snippet.ChannelId)
 		results = append(results, SearchResult{
 			ChannelTitle: item.Snippet.ChannelTitle,
 			ChannelID:    item.Snippet.ChannelId,
 		})
+	}
+
+	if len(channelIDs) > 0 {
+		channelsResponse, err := service.Channels.List([]string{"contentDetails", "statistics"}).Id(strings.Join(channelIDs, ",")).Do()
+		if err != nil {
+			return nil, err
+		}
+
+		channelMap := make(map[string]*youtube.Channel)
+		for _, ch := range channelsResponse.Items {
+			channelMap[ch.Id] = ch
+		}
+
+		for i := range results {
+			if ch, ok := channelMap[results[i].ChannelID]; ok {
+				results[i].UploadsPlaylistID = ch.ContentDetails.RelatedPlaylists.Uploads
+				results[i].VideoCount = ch.Statistics.VideoCount
+			}
+		}
 	}
 
 	return results, nil
